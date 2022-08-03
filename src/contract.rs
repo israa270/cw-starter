@@ -5,7 +5,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, GetCountResponse, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::state::{Config, CONFIG, Poll, POLLS};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw-starter";
@@ -18,17 +18,27 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let state = State {
-        count: msg.count,
-        owner: info.sender.clone(),
-    };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    STATE.save(deps.storage, &state)?;
-
+    let admin = msg.admin.unwrap_or(info.sender.to_string());
+    let validated_admin = deps.api.addr_validate(&admin)?;
+    let config = Config {
+        admin: validated_admin.clone(),
+    };
+    CONFIG.save(deps.storage, &config)?;
     Ok(Response::new()
-        .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender)
-        .add_attribute("count", msg.count.to_string()))
+        .add_attribute("action", "instantiate")
+        .add_attribute("admin", validated_admin.to_string()))
+    // let state = State {
+    //     count: msg.count,
+    //     owner: info.sender.clone(),
+    // };
+    // set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    // STATE.save(deps.storage, &state)?;
+
+    // Ok(Response::new()
+    //     .add_attribute("method", "instantiate")
+    //     .add_attribute("owner", info.sender)
+    //     .add_attribute("count", msg.count.to_string()))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -44,8 +54,36 @@ pub fn execute(
     }
 }
 
+fn execute_create_poll(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    poll_id: String,
+    question: String,
+    options: Vec<String>,
+) -> Result<Response, ContractError> {
+    if options.len() > 10 {
+        return Err(ContractError::TooManyOptions {});
+    }
+
+    let mut opts: Vec<(String, u64)> = vec![];
+    for option in options {
+        opts.push((option, 0));
+    }
+
+    let poll = Poll {
+        creator: info.sender,
+        question,
+        options: opts
+    };
+
+    POLLS.save(deps.storage, poll_id, &poll)?;
+
+    Ok(Response::new())
+}
+
 pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+    CONFIG.update(deps.storage, |mut state| -> Result<_, ContractError> {
         state.count += 1;
         Ok(state)
     })?;
@@ -54,7 +92,7 @@ pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
 }
 
 pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
+    CONFIG.update(deps.storage, |mut state| -> Result<_, ContractError> {
         if info.sender != state.owner {
             return Err(ContractError::Unauthorized {});
         }
@@ -72,7 +110,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 }
 
 fn query_count(deps: Deps) -> StdResult<GetCountResponse> {
-    let state = STATE.load(deps.storage)?;
+    let state = CONFIG.load(deps.storage)?;
     Ok(GetCountResponse { count: state.count })
 }
 
@@ -80,7 +118,50 @@ fn query_count(deps: Deps) -> StdResult<GetCountResponse> {
 mod tests {
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary};
+    use cosmwasm_std::{coins, from_binary, attr};
+    use crate::contract::instantiate; // the contract instantiate function
+    use crate::msg::InstantiateMsg; // our instantate method
+
+      // Two fake addresses we will use to mock_info
+      pub const ADDR1: &str = "addr1";
+      pub const ADDR2: &str = "addr2";
+
+      #[cfg_attr(not(feature = "library"), entry_point)]
+            pub fn execute(
+                _deps: DepsMut,
+                _env: Env,
+                _info: MessageInfo,
+                _msg: ExecuteMsg,
+            ) -> Result<Response, ContractError> {
+                match msg {
+                    ExecuteMsg::CreatePoll {
+                        poll_id,
+                        question,
+                        options,
+                    } => unimplemented!(),
+                    ExecuteMsg::Vote { poll_id, vote } => unimplemented!(),
+                }
+            }
+
+    #[test]
+    fn test_instantiate() {
+        // Mock the dependencies, must be mutable so we can pass it as a mutable, empty vector means our contract has no balance
+        let mut deps = mock_dependencies();
+        // Mock the contract environment, contains the block info, contract address, etc.
+        let env = mock_env();
+        // Mock the message info, ADDR1 will be the sender, the empty vec means we sent no funds.
+        let info = mock_info(ADDR1, &vec![]);
+
+        // Create a message where we (the sender) will be an admin
+        let msg = InstantiateMsg { admin: None };
+        // Call instantiate, unwrap to assert success
+        let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![attr("action", "instantiate"), attr("admin", ADDR1)]
+        )
+    }
 
     #[test]
     fn proper_initialization() {
